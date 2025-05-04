@@ -1,0 +1,7 @@
+numpy
+galois
+vertexai
+opencv-python
+
+
+
