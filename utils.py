@@ -33,9 +33,10 @@ def rotate_and_scale(img, angle, scale):
     # Now, we will perform actual image rotation 
     if len(img.shape) == 3:
         borderValue = (255,255,255)
+        rotated_img = cv2.warpAffine(img, rotationMatrix, (new_width, new_height), borderValue=borderValue)
     else:
-        borderValue = 1
-    rotatingimage = cv2.warpAffine( 
-        img, rotationMatrix, (new_width, new_height), borderValue=borderValue) 
-  
-    return rotatingimage 
+        borderValue = 0
+        rotated_img = cv2.warpAffine(img, rotationMatrix, (new_width, new_height), borderValue=borderValue, flags=cv2.INTER_NEAREST)
+    # cv2.imwrite("rotated_img.png", rotated_img)
+
+    return rotated_img

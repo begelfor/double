@@ -2,6 +2,7 @@ numpy
 galois
 vertexai
 opencv-python
+networkx
 
 
 
