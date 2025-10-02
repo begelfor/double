@@ -11,14 +11,14 @@ from pathlib import Path
 
 class Double:
     def __init__(self, folder:str, word_list:list[str], n:int, card_size: int,
-                 min_distance: int = 10,
-                 C: float = 0.2,
+                 min_distance: int = 20,
+                 factor: int = 4,
                  n_tries: int = 30,
-                 k_tries: int = 30):
+                 k_tries: int = 10):
         self.folder = Path(folder)
         self.card_size = card_size
-        self.min_distance = min_distance
-        self.C = C
+        self.min_distance = min_distance//factor
+        self.factor = factor
         self.n_tries = n_tries
         self.k_tries = k_tries
         self.image_folder = self.folder / "images"
@@ -31,11 +31,11 @@ class Double:
         if not len(lines) == len(word_list):
             raise ValueError("Number of words does not match number of lines")
         self.word_list = word_list
-        # self.create_images()
+        self.create_images()
         self.word2imgs = self.get_images_and_masks()
 
         self.tries_stats = defaultdict(list)
-        for i, line in tqdm(enumerate(lines)):
+        for i, line in enumerate(tqdm(lines)):
             card = self.create_card([word_list[i] for i in line])
             cv2.imwrite(self.folder/"cards" / f"{i}.jpg", card)
         for key, l in self.tries_stats.items():
@@ -47,24 +47,24 @@ class Double:
         existing_images = self.image_folder.glob("*.jpg")
         already_done = [x.stem for x in existing_images]
 
-        for i, word in tqdm(enumerate(set(self.word_list) - set(already_done))):
+        for i, word in enumerate(tqdm(set(self.word_list) - set(already_done))):
             if i>0:
                 time.sleep(40)
             prompt = f" A comics style image of {word} with a white background"
             path  = image_generator.generate_image_from_text(prompt, self.image_folder/word)
 
-            img = cv2.imread(path)
-            # Find non-white pixels
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            _, binary = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
-            
-            # Find bounding box of non-white pixels
-            coords = cv2.findNonZero(binary)
-            x, y, w, h = cv2.boundingRect(coords)
-            
-            # Crop the image
-            img = img[y:y+h, x:x+w]
-            cv2.imwrite(path, img)
+            # img = cv2.imread(path)
+            # # Find non-white pixels
+            # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            # _, binary = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+            #
+            # # Find bounding box of non-white pixels
+            # coords = cv2.findNonZero(binary)
+            # x, y, w, h = cv2.boundingRect(coords)
+            #
+            # # Crop the image
+            # img = img[y:y+h, x:x+w]
+            # cv2.imwrite(path, img)
 
     def get_images_and_masks(self):
         d = {}
@@ -73,23 +73,26 @@ class Double:
                 word = path.stem
                 img = cv2.imread(path)
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                height, width = img.shape[:2]
                 _, binary = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+                binary = cv2.resize(binary, (height//self.factor, width//self.factor), interpolation=cv2.INTER_NEAREST)
                 d[word] = {"image":img, "mask":binary}
         return d
 
     def create_card(self, card_words:list[str]):
         words = set(card_words)
         # we first work only with masks
-        card = np.zeros((self.card_size, self.card_size), dtype=np.uint8)
+        size= self.card_size//self.factor
+        card = np.zeros((size, size), dtype=np.uint8)
         thickness = 2
 
-        card = cv2.circle(card, (self.card_size//2, self.card_size//2), self.card_size//2, 255, -1)
-        cv2.floodFill(card, None, seedPoint=(0,0), newVal=0)
+        card = cv2.circle(card, (size//2, size//2), size//2, 255, -1)
         remove_card_counter = 0
 
         params = {}
         while len(params) < len(card_words):
             distance_matrix = cv2.distanceTransform(card, cv2.DIST_L2, 5)
+            distance_matrix[distance_matrix < self.min_distance] = 0
             # Flatten distance matrix and create probability distribution
             flat_distances = distance_matrix.flatten()
             # Add small constant to avoid division by zero
@@ -97,7 +100,7 @@ class Double:
             probs = probs / probs.sum()
             for i_n in range(self.n_tries):
                 word = np.random.choice(list(words-set(params.keys())))
-                scale = np.random.uniform(.2, .5)
+                scale = np.random.uniform(.22, .72)
                 angle = np.random.uniform(0, 360)
                 mask = rotate_and_scale(self.word2imgs[word]["mask"], scale=scale, angle=angle)
                 y_cm, x_cm = np.array(np.where(mask>0)).mean(axis=1).astype(int)
@@ -107,7 +110,7 @@ class Double:
                     idx = np.random.choice(len(probs), p=probs)
                     # Convert back to 2D coordinates
                     y, x = np.unravel_index(idx, distance_matrix.shape)
-                    if y-y_cm < 0 or x-x_cm < 0 or y-y_cm + height> self.card_size or x-x_cm + width> self.card_size:
+                    if y-y_cm < 0 or x-x_cm < 0 or y-y_cm + height> size or x-x_cm + width> size:
                         continue
 
                     all_distances = distance_matrix[y-y_cm:y-y_cm+height, x-x_cm:x-x_cm+width][mask>0]
@@ -132,18 +135,23 @@ class Double:
                 card[offset_y:offset_y+height, offset_x:offset_x+width][mask>0] = 255
                 params.pop(word)
                 remove_card_counter += 1
-                cv2.imwrite(self.folder/"cards" / f"{'_'.join(card_words)}_{remove_card_counter}.jpg", card)
+                # cv2.imwrite(self.folder/"cards" / f"{'_'.join(card_words)}_{remove_card_counter}.jpg", card)
         # now we create the actual card
+        # cv2.imwrite(self.folder / "cards" / f"{'_'.join(card_words)}.jpg", card)
         card = np.full((self.card_size, self.card_size, 3), 255, dtype=np.uint8)
         cv2.circle(card, (self.card_size//2, self.card_size//2), self.card_size//2-thickness, (0, 0, 0), thickness)
         for word in params:
             img = self.word2imgs[word]["image"]
             img = rotate_and_scale(img, params[word]["angle"], params[word]["scale"])
-            mask = self.word2imgs[word]["mask"]
-            mask = rotate_and_scale(mask, params[word]["angle"], params[word]["scale"])
-            offset_y = params[word]["offset_y"] 
-            offset_x = params[word]["offset_x"]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            _, mask = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+            offset_y = params[word]["offset_y"]*self.factor
+            offset_x = params[word]["offset_x"]*self.factor
             height, width, _ = img.shape
+            if offset_y+height > self.card_size:
+                offset_y = self.card_size-height
+            if offset_x+width > self.card_size:
+                offset_x = self.card_size-width
             card[offset_y:offset_y+height, offset_x:offset_x+width][mask>0] = img[mask>0]
         return card
 
@@ -157,11 +165,14 @@ def main():
     'car', 'window', 'door', 'cup', 'computer', 'sun', 'star', 'toothbrush', 'plate',
     'bowl', 'fork', 'knife', 'spoon', 'bottle', 'hand', 'leg', 'head', 'eye', 'nose', 'sink',
     'potato', 'carrot', 'pineapple', 'couch', 'chair', 'table', 'bed', 'lamp',
+    'peas', 'carpet', 'map', 'stairs', 'house', 'kettle', 'oven', 'tree', 'grass', 'leaf', 'sword', 'stone', 'cloud', 'rainbow',
+    'comb', 'cheese', 'sock', 'underpants',
     'mirror', 'clock', 'key', 'book', 'pen', 'pencil', 'paper', 'blanket', 'pillow']
-    n = 7
+    n = 4
     L = n*n+n+1
     word_list = word_list[:L]
-    double = Double(folder=folder, word_list=word_list, n=n, card_size=1000)
+    np.random.seed(0)
+    double = Double(folder=folder, word_list=word_list, n=n, card_size=1024)
 
 if __name__ == "__main__":
     main()

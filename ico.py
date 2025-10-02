@@ -116,4 +116,4 @@ def make_dome(divisions=2):
 
 
 if __name__ == "__main__":
-    make_dome(divisions=1)
+    make_dome(divisions=2)
